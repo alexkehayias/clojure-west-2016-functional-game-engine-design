@@ -1,0 +1,466 @@
+#+Title: Functional Game Engine Design for the Web
+#+Author: Alex Kehayias
+#+Email: @alexkehayias
+
+#+OPTIONS: reveal_center:t reveal_progress:t reveal_history:t reveal_control:t
+#+OPTIONS: reveal_rolling_links:nil reveal_overview:t num:nil
+#+OPTIONS: reveal_width:1140 reveal_height:900
+#+OPTIONS: toc:nil
+
+#+REVEAL_ROOT: http://cdn.jsdelivr.net/reveal.js/3.0.0/
+#+REVEAL_MARGIN: 0.1
+#+REVEAL_MIN_SCALE: 1.0
+#+REVEAL_MAX_SCALE: 2.5
+#+REVEAL_TRANS: none
+#+REVEAL_THEME: sky
+#+REVEAL_HLEVEL: 3
+#+REVEAL_HEAD_PREAMBLE: <meta name="description" content="Functional Game Engine Design for the Web"/><link href="https://fonts.googleapis.com/css?family=Cabin" rel="stylesheet" type="text/css"><link type="text/css" rel="stylesheet" href="./styles.css"/>
+#+REVEAL_POSTAMBLE: <p>Created by Alex Kehayias</p>
+#+REVEAL_PLUGINS: (markdown notes zoom)
+* What is a game?
+** State!
+- The only thing that matters
+- The state is the game is the fun
+- Games are state transitions at 60 FPS (16ms)
+- Games are complicated (lots of moving parts)
+- Writing games can be less complex (less intertwined parts)
+** Game == Statetime
+[[./statetime.png]]
+* Why another game engine for the web?
+Why not use Unity/Cocos2d/Phaser/etc?
+** Clojure(Script)
+** The appeal of functional programming to express complex games
+** It's fun to build!!
+* Example
+#+BEGIN_SRC python
+class Player:
+    x = 0
+    y = 0
+
+    def move_towards(self):
+        ...
+    # And more methods that mutate player state
+
+class Game:
+    def __init__(self):
+        self.player = Player()
+        self.enemies = [Enemy() for i in range(100)]
+
+    def run(self):
+        for e in enemies:
+            if enemy.y - player.y < enemy.site_range:
+                enemy.move_towards(player.x, player.y)
+
+        if game_pad.is_pressed('left'):
+            player.x = player.x + 1
+            player.y = player.y + 1
+        elif:
+        ...
+        # And more intertwined orchestration of objects
+
+#+END_SRC
+* What's wrong?
+- The developer needs to write how the game works AND what it does
+- Adding new behavior can break old behavior
+- Coupling of Enemy to Player
+- State and functions to work on state are intermingled
+* Rethinking how we express games
+- Modularity in adding new features and content
+- Declarative
+- Functional purity (mostly!)
+- No global state access
+- Interactive development
+* Modularity
+** Class hierarchies
+[[./class_hierarchy.png]]
+** Entity component system
+- Originates from the development of Dungeon Siege for use with online multiplayer demands
+- Popularized by the Unity game engine
+- Decouples object hierarchies and focuses on collections of aspects and the means of iterating over them
+- Easily add, remove, synthesise new things from reusable components
+- Pairs well with functional programming techniques!
+** Component based modeling
+[[./component_modeling.png]]
+** Entity
+#+BEGIN_SRC clojure
+{:player1 [:controllable :moveable :collidable]}
+#+END_SRC
+- A label
+- A collection of component labels
+** Component
+#+BEGIN_SRC clojure
+{:moveable f}
+#+END_SRC
+- A label
+- A function of component state
+# NOTES
+# In reality it's more complicated than that:
+# - Cleanup of side-effects when being removed
+# - Meta data for the game engine to call the function with context
+** System
+#+BEGIN_SRC clojure
+{:movement f}
+#+END_SRC
+- A label
+- A function of state
+- Iterates over all entities that have a component
+- Calls component function with component state that belongs to the entity
+- Puts it all together to return the next game state
+- Basically, it's a lense
+** Scene
+#+BEGIN_SRC clojure
+{:title-screen [:menu :input :render]
+ :game [:input :movement :ai]}
+#+END_SRC
+- A label
+- A collection of system labels in the order they should be executed
+# Talk about ordering here
+** Seeing a pattern here?
+- It's all data
+- It's all values
+- Gameoiconicity??
+** Putting it all together
+Game state is a hashmap that has our entities, systems, components
+#+BEGIN_SRC clojure
+{:entities {:player1 [:move :animate]}
+ :components {:move move :animate animate}
+ :systems {:movement {:component :move :fn move-system}
+           :animation {:component :animate :fn animation-system}}
+ :scene [:movement :animation]
+ :state {:move {:player1 {:x 1 :y 1}}
+         :animation {:player1 {:frame 0}}}}
+#+END_SRC
+Get all system functions in the order of the scene
+#+BEGIN_SRC clojure
+(map #(get-in state [:systems %]) (:scene state))
+#+END_SRC
+Compose all system functions and call with state
+#+BEGIN_SRC clojure
+((comp s1 s2 s3) state)
+#+END_SRC
+Recur!
+** Summary
+[[./execution_model.png]]
+** The good
+- Pure functions
+- Linear
+- Parallelize-able
+- No singletons
+- Side-effects can be isolated
+- Dynamic
+- Components can only change their own state nothing else
+- Immutable
+- Easy to add/remove new functionality without rewriting other code
+- Declarative
+** The bad
+- What if I need more than the component state?
+- Fat components (mixing concerns)
+- Boilerplate in system functions
+- Performance? (more on that later)
+- Polymorphism?
+- Not strict, errors can be opaque
+- What about tooling?
+* Sharing state ಠ__ಠ
+- Games tend to have things that interact with each other
+- Share component state without tightly coupling
+- Make it read only
+- Principle of least privilege (of state)
+** Coupling
+#+BEGIN_SRC clojure
+(defn blob-component
+  [component-state]
+  (if (get component-state :colliding?)
+    (if (collided-with-enemy? component-state)
+      (update component-state :health dec)
+      (if (get component-state :moving?)
+         (assoc component-state :offset [0 0])
+         (assoc component-state :offset (get component-state :move-offset))))
+  component-state)
+#+END_SRC
+** Use an event queue
+#+BEGIN_SRC clojure
+(defn get-events
+  [state selectors]
+  (get-in state selectors))
+
+(defn mk-event
+  [msg selectors]
+  {:selectors selectors :msg msg})
+
+(defn emit-event
+  [state msg selectors]
+  (let [event (mk-event msg selectors)]
+    (update-in state selectors conj event)))
+#+END_SRC
+Example
+#+BEGIN_SRC clojure
+(emit-event {} {:foo :bar} [:collision :player1])
+>> {:collision
+..   {:player1
+..     [{:selectors [:collision :player1],
+..       :msg {:foo :bar}}]}}
+#+END_SRC
+** Using events
+#+BEGIN_SRC clojure
+(defn collision
+  [component-state context]
+  (if-let [collider (colliding? component-state)]
+    [component-state (mk-event {:colliding collider} [:collision entity-id])]
+    component-state))
+
+(defn movement
+  [component-state {:keys [inbox]}]
+  (if (collision-event? inbox)
+    [component-state (mk-event {:offset-x 0 :offset-y 0}
+                               [:move-change entity-id])]
+    component-state))
+
+(defn position
+  [component-state {:keys [inbox]}]
+  (if-let (move-event? inbox)
+    (update component-state :pos (calculate-coords inbox))
+    component-state))
+
+(defn health
+  [component-state {:keys [inbox]}]
+  (if-let (enemy-collision-event? inbox)
+    (update component-state :hitpoints dec)
+    component-state))
+#+END_SRC
+** Another solution
+- Declare up front what component state you want
+- Make the game engine figure out how to efficiently call your component with what's needed
+- Can be much more efficient
+#+BEGIN_SRC clojure
+{:moveable {:fn f
+            :select-components [[:position :player1]]}}
+#+END_SRC
+* Making the game declarative
+- Capture what the game should do in one place
+- Use the full tooling of higher order functions and data manipulation functions
+- Game engine needs to only interpret the spec
+- Doesn't matter who or how the spec is generated
+- No need for macros
+** Example
+#+BEGIN_SRC clojure
+(game-state {}
+  {:type :scene
+   :id :default
+   :systems [:s1]}
+  {:type :system
+   :id :positioning
+   :fn f1
+   :components [:position]}
+  {:type :component
+   :id :position
+   :fn f1}
+  {:type :entity
+   :id :e1
+   :components [{:id :position
+                 :state {:x 20 :y 20}}]})
+#+END_SRC
+** Behavior is described with data, not code
+#+BEGIN_SRC clojure
+{:type :entity
+ :id :e1
+ :components [{:id :position
+               :state {:x 20 :y 20}}]}
+#+END_SRC
+** Interpreting the game spec
+#+BEGIN_SRC clojure
+(defmulti mk-state
+  (fn [state spec]
+    (:type spec)))
+
+(defmethod mk-state :entity
+  [state {:keys [id components]}]
+  ...)
+
+(defmethod mk-state :component
+  [state {:keys [id fn]}]
+  ...)
+
+(defmethod mk-state :system
+  [state {:keys [id fn]}]
+  ...)
+
+(defn game-state
+  [state & specs]
+  (reduce #(mk-state %1 %2) state specs))
+#+END_SRC
+** Removing system function boilerplate
+#+BEGIN_SRC clojure
+(defmethod mk-state :system
+  [state {:keys [id fn component]}]
+  (if component
+    (system state id fn)
+    (default-system state id component)))
+;; The spec to avoid having to write the same system function repeatedly
+{:type :system
+ :id :s1
+ :component {:id :c1
+             :fn f1}}
+#+END_SRC
+* Tooling
+** Interactive development
+*** Browser REPL
+- Near instant feedback by connecting to the running game in the browser
+- Challenges with visually testing without constructing the whole world
+*** Devcards
+Don't construct the entire game world, visually test in the browser to simulate behavior
+https://github.com/bhauman/devcards
+** Inspecting running game state
+[[./praline_demo.gif]]
+*** Implementation
+Since the game state is a nested datastructure, we can auto generate a live inspector using Reagent
+#+BEGIN_SRC clojure
+(defprotocol InspectComponent
+  "Provides methods for returning a Reagent component for inspection"
+  (inspect [this label key-path app-state state]
+    "Returns a component for inspecting this type"))
+
+(extend-type PersistentHashMap
+  InspectComponent
+  (inspect [this label key-path state]
+    (let [child-paths (map #(conj key-path %) (keys this))]
+       [:div {:on-click (handle-show-path child-paths)} label
+        (for [[k v] (sort-by (comp name first) (seq this))]
+          [inspect v (name k) (conj key-path k) state])])))
+#+END_SRC
+** Implement your own with middleware
+Use Ring-like middleware to wrap the game loop with your own tooling
+#+BEGIN_SRC clojure
+(defn wrap-copy-state-to-atom
+  "Copy the latest game state to the copy-atom so it can be inspected in REPL"
+  [f copy-atom]
+  (fn [state]
+    (let [next-state (f state)]
+      (reset! copy-atom next-state))))
+#+END_SRC
+* Performance tuning
+** Use the profiler
+*** CPU Tree
+[[./profiler_tree.png]]
+*** CPU Chart
+[[./profiler_chart.png]]
+** Variadic function signatures
+#+BEGIN_SRC clojure
+(defn foo [x & args]
+  (body ..))
+#+END_SRC
+- Dynamic dispatching is not great in a tight loop
+- You should probably know what signature are going to be used anyway
+- Javascript compiler (V8) bails out and can't optimize
+- Use multiple arity functions instead
+** Multiple arity functions
+#+BEGIN_SRC clojure
+(defn foo
+  ([x]
+   (foo x nil))
+  ([x y]
+   (bar x y)))
+#+END_SRC
+- Finite number arities, not infinite
+- Can be optimized by the compiler/runtime
+- Much faster
+** Avoid partials
+#+BEGIN_SRC clojure
+(apply (partial x) [y z])
+#+END_SRC
+** Empty checking
+#+BEGIN_SRC clojure
+;; Bad
+(empty? [])
+;; Good
+(seq [])
+#+END_SRC
+** Keyword equality
+#+BEGIN_SRC clojure
+;; Bad
+(= :a :a)
+;; Good
+(keyword-identical? :a :a)
+#+END_SRC
+** Runtime polymorphism
+#+BEGIN_SRC clojure
+;; Bad
+(defmulti foo (fn [& args] ...))
+;; Good, but less elegant
+(condp = x
+  ...)
+;; Fastest??
+(defprotocol Fooable
+  (foo [this x]))
+
+(deftype Thing
+  Fooable
+  (foo [this x] ...))
+#+END_SRC
+- multimethods are too slow for a tight loop
+- condp compiles to a conditional that can be optimized
+- Protocols and types should be fastest, but static
+- Tradeoff speed vs dynamism
+** Just def it
+If a function is used multiple times with the same result, def it
+#+BEGIN_SRC clojure
+;; Bad, extra function call every time
+(defn foo [x]
+  (conj (range 10) x))
+;; Good, skip the extra calls
+(def numbers (range 10))
+
+(defn foo [x]
+  (conj numbers x))
+#+END_SRC
+** Lazyness
+- Most of the Clojure core is lazy map/for/concat/filter etc.
+- Game code is usually eager and inputs are finite
+- Favor reduce over map
+- Write your own for loop that does not use lazy-seq to accumulate the results
+** Avoid intermediate collections
+#+BEGIN_SRC clojure
+;; Bad, procedurally building up multiple collections
+(let [v1 (map inc numbers)
+      v2 (filter pos? v1)
+      v3 (map #(* 2 %) v2)]
+  (into {} (map #(vector % (inc %)) v3)))
+;; Good, do it all in one shot using transients
+(loop [nums numbers
+       accum (transient {})]
+  (let [n (first numbers)]
+    (if n
+      (recur (rest nums) (assoc! accum n (inc n)))
+      accum)))
+#+END_SRC
+** ClojureScript specific
+- Garbage collection is quite good in JS engines
+- Clojure only evaluates false for nil and false, not null/undefined/NaN/""/0
+- If you already know it's a boolean, skip the extra checking with a typehint ^boolean
+- Use arrays and transients
+- Advanced compiler options
+  - :static-fns
+  - :elide-asserts
+** Immutability too slow?
+- Tried to write my own data structure to take advantage of mutability
+- Mine was slower
+- Use a profiler, it's probably not this!
+- Use interop with the host environment if you really need
+** The slowest part is usually your implementation, not functional programming
+* Demo
+* The functional game/engine I'm building
+- Chocolatier
+- https://github.com/alexkehayias/chocolatier
+- A functional, repl-driven, game engine targeting 2D games in the browser written in ClojureScript
+- Actively in development
+- 60 FPS!!
+* Let's make creating games sweeter!
+# Talk about Bryce's talk and how it is much more specific to solving problems IRL in games
+Thank you!
+@alexkehayias
+https://github.com/alexkehayias/chocolatier
+* Resources
+- Scott Bilas (Dungeon Siege) GDC talk that started it all: http://t-machine.org/index.php/2007/12/22/entity-systems-are-the-future-of-mmog-development-part-3/
+- Game Programming Patterns chapter on Components: http://gameprogrammingpatterns.com/component.html
+- Brian Bucklew (Qud, Sproggiwood) talk at IRDC US 2015: https://www.youtube.com/watch?v=U03XXzcThGU
+- Adam Martin's blog series on ECS (kind of confusing): http://t-machine.org/index.php/2007/09/03/entity-systems-are-the-future-of-mmog-development-part-1/
+- Slides from this talk: https://github.com/alexkehayias/clojure-west-2016-functional-game-engine-design

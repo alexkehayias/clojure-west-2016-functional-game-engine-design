@@ -1,0 +1,11 @@
+* Functional Game Engine Design for the Web
+Slides from my talk at ClojureWest April 16th, 2016 generated from ~org-mode~ using ~ox-reveal~.
+
+View the slides (HTML):
+http://htmlpreview.github.io/?https://raw.githubusercontent.com/alexkehayias/clojure-west-2016-functional-game-engine-design/master/game_engine_design.html
+
+Generating the slides:
+- Install latest ~org-mode~ version 8.3.1-95-g1dbb25-elpa
+- Install ~ox-reveal~ version 20150824.214
+- Open ~game_engine_design.org~ in Emacs
+- Export using ~ox-reveal~ with ~C-c C-e SHIFT-R SHIFT-R~
